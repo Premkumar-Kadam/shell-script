@@ -29,7 +29,14 @@ def read_csv_rows(path: str) -> List[Dict[str, str]]:
     rows = []
     try:
         with open(path, newline='', encoding='utf-8') as f:
-            reader = csv.reader(f)
+            # Read a sample to let Sniffer detect delimiter/dialect
+            sample = f.read(2048)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample)
+            except Exception:
+                dialect = csv.excel
+            reader = csv.reader(f, dialect)
             try:
                 first = next(reader)
             except StopIteration:
@@ -40,7 +47,7 @@ def read_csv_rows(path: str) -> List[Dict[str, str]]:
             if len(headers) >= 3 and all(h.lower() in expected for h in headers[:3]):
                 # Use DictReader with original file pointer reset
                 f.seek(0)
-                dict_reader = csv.DictReader(f)
+                dict_reader = csv.DictReader(f, dialect=dialect)
                 for r in dict_reader:
                     rows.append({
                         'Name': r.get('Name', r.get('name', '')).strip(),
@@ -49,16 +56,35 @@ def read_csv_rows(path: str) -> List[Dict[str, str]]:
                     })
             else:
                 # Treat first row as data and map first three columns
+                # If reader returned single-field rows (e.g., tab-delimited read as one),
+                # try splitting using the detected delimiter.
+                delim = getattr(dialect, 'delimiter', ',')
+                def split_row(item_list):
+                    if len(item_list) >= 3:
+                        return item_list
+                    # attempt to split the first element by delimiter if present
+                    parts = item_list[0].split(delim) if item_list else []
+                    if len(parts) >= 3:
+                        return [p.strip() for p in parts]
+                    # fallback: try common separators
+                    for s in ['\t', ',', ';', '|']:
+                        parts = item_list[0].split(s) if item_list else []
+                        if len(parts) >= 3:
+                            return [p.strip() for p in parts]
+                    return [item_list[0].strip()] if item_list else ['']
+
+                first_parts = split_row(first)
                 rows.append({
-                    'Name': headers[0].strip(),
-                    'Subject': headers[1].strip() if len(headers) > 1 else '',
-                    'Marks': headers[2].strip() if len(headers) > 2 else ''
+                    'Name': first_parts[0].strip(),
+                    'Subject': first_parts[1].strip() if len(first_parts) > 1 else '',
+                    'Marks': first_parts[2].strip() if len(first_parts) > 2 else ''
                 })
                 for cols in reader:
+                    parts = split_row(cols)
                     rows.append({
-                        'Name': cols[0].strip() if len(cols) > 0 else '',
-                        'Subject': cols[1].strip() if len(cols) > 1 else '',
-                        'Marks': cols[2].strip() if len(cols) > 2 else ''
+                        'Name': parts[0].strip() if len(parts) > 0 else '',
+                        'Subject': parts[1].strip() if len(parts) > 1 else '',
+                        'Marks': parts[2].strip() if len(parts) > 2 else ''
                     })
     except FileNotFoundError:
         raise
